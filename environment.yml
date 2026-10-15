@@ -1,0 +1,16 @@
+name: fdem_lci_pwi
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9
+  - numpy<2
+  - scipy
+  - matplotlib
+  - pandas
+  - joblib
+  - pip
+  - pip:
+      - pygimli>=1.4.6
+      - empymod
+      - emg3d
