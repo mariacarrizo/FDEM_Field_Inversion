@@ -82,8 +82,10 @@ def main():
     LCI.createWeight(data_true, cWeight_1=args.cw1, cWeight_2=args.cw2, nLay=nLayers)
     LCI.createConstraints()
 
-    LCI.region(1).setTransModel(pg.trans.TransLogLU(args.thk_min, args.thk_max))
-    LCI.region(2).setTransModel(pg.trans.TransLogLU(args.sig_min, args.sig_max))
+    transThk = pg.trans.TransLogLU(args.thk_min, args.thk_max)
+    transSig = pg.trans.TransLogLU(args.sig_min, args.sig_max)
+    LCI.region(1).setTransModel(transThk)
+    LCI.region(2).setTransModel(transSig)
 
     data_vec = data_true.ravel()
     rel_err  = np.ones_like(data_vec) * 1e-3

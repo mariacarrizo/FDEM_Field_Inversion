@@ -60,8 +60,11 @@ def main():
 
     FopClass = FDEM1DModelling_nosort if args.no_sort else FDEM1DModelling
     fop = FopClass(nlay=2)
-    fop.region(0).setTransModel(pg.trans.TransLogLU(args.thk_min, args.thk_max))
-    fop.region(1).setTransModel(pg.trans.TransLogLU(args.sig_min, args.sig_max))
+    transThk = pg.trans.TransLogLU(args.thk_min, args.thk_max)
+    transSig = pg.trans.TransLogLU(args.sig_min, args.sig_max)
+    fop.region(0).setTransModel(transThk)
+    fop.region(1).setTransModel(transSig)
+
 
     start_model = np.array([3, 0.5, 0.5])
     model_inv = []
