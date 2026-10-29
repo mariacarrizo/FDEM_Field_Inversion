@@ -69,17 +69,18 @@ def invert_line(data_line, nlay, args):
     LCI.normalization(data_line, cWeight_1=args.cw1, cWeight_2=args.cw2, nLay=nlay)
     LCI.createWeight(data_line, cWeight_1=args.cw1, cWeight_2=args.cw2, nLay=nlay)
     LCI.createConstraints()
+    transThk = pg.trans.TransLogLU(args.thk_min, args.thk_max)
+    transSig = pg.trans.TransLogLU(args.sig_min, args.sig_max)
+    LCI.region(1).setTransModel(transThk)
+    LCI.region(2).setTransModel(transSig)
 
-    LCI.region(1).setTransModel(pg.trans.TransLogLU(args.thk_min, args.thk_max))
-    LCI.region(2).setTransModel(pg.trans.TransLogLU(args.sig_min, args.sig_max))
-
+    
     data_vector = data_line.ravel()
     relative_error = np.ones_like(data_vector) * args.rel_error
 
     inv = pg.Inversion(LCI)
-    model_inv = inv.run(data_vector, relative_error,
+    model_inv = inv.run(dataVals=data_vector, rel_error=relative_error,
                          startModel=model_ini.ravel(), verbose=False, lam=args.lam)
-
     model_inv = np.asarray(model_inv).reshape(nM, n_par)
     response = np.asarray(inv.response).reshape(nM, data_line.shape[1])
     return model_inv, response

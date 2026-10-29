@@ -59,8 +59,10 @@ def main():
     print(f'{npos} soundings, nlay={nlay}, lam={args.lam}')
 
     fop = FDEM1DModelling_field(nlay=nlay, height=args.height, config=FIELD_CONFIG)
-    fop.region(0).setTransModel(pg.trans.TransLogLU(args.thk_min, args.thk_max))
-    fop.region(1).setTransModel(pg.trans.TransLogLU(args.sig_min, args.sig_max))
+    transThk = pg.trans.TransLogLU(args.thk_min, args.thk_max)
+    transSig = pg.trans.TransLogLU(args.sig_min, args.sig_max)
+    fop.region(0).setTransModel(transThk)
+    fop.region(1).setTransModel(transSig)
 
     start_model = np.ones(n_par)
     start_model[:nlay - 1] *= 3.0   # initial thicknesses [m]
