@@ -3,7 +3,7 @@ import numpy as np
 from scipy.constants import mu_0
 import pygimli as pg
 from dataclasses import dataclass, field, replace
-from typing import List, Union
+from typing import Dict, List, Optional, Union
 
 # IMPORTANT DEFINE nlay
 nlay = 2
@@ -46,6 +46,57 @@ class InstrumentConfig:
     perp_spacings: List[float] = field(default_factory=lambda: [2.1, 4.1, 8.1])
     coil_orientations: List[str] = field(default_factory=lambda: ['H', 'V', 'P'])
     height: float = 0.3
+    offsets: Optional[Dict[str, List[float]]] = None
+
+    def __post_init__(self):
+        if self.offsets is not None:
+            bad = set(self.offsets) - {'H', 'V', 'P'}
+            if bad:
+                raise ValueError(f"Unknown coil orientation(s) {sorted(bad)}; use 'H', 'V', 'P'")
+
+    def subset(self, coils=None, offsets=None):
+        """Return a copy using only some coil orientations and/or offsets.
+
+        Parameters
+        ----------
+        coils : list of str, optional
+            Orientations to keep, e.g. ``['H']`` or ``['H', 'P']``.
+            Default: all active orientations.
+        offsets : list of float, optional
+            Nominal offsets to keep, e.g. ``[2, 4]``. Matched on the integer part,
+            so 2 selects H/V at 2.0 m and P at 2.1 m. Default: all offsets.
+
+        Examples
+        --------
+        >>> cfg = DUALEM842S.subset(coils=['H'], offsets=[2, 4])   # H at 2.0 and 4.0 m
+        >>> cfg = DUALEM842S.subset(coils=['H', 'P'], offsets=[4])  # H 4.0 m, P 4.1 m
+        """
+        coils = list(coils) if coils is not None else [o for o in 'HVP' if _offsets(self, o)]
+        want = None if offsets is None else {int(np.floor(o + 1e-9)) for o in offsets}
+        sel = {}
+        for o in coils:
+            if o not in ('H', 'V', 'P'):
+                raise ValueError(f"Unknown coil orientation {o!r}; use 'H', 'V', 'P'")
+            offs = _offsets(self, o)
+            if want is not None:
+                offs = [x for x in offs if int(np.floor(x + 1e-9)) in want]
+            if not offs:
+                raise ValueError(f"No offsets left for coil {o!r} (requested {offsets})")
+            sel[o] = offs
+        return replace(self, offsets=sel, coil_orientations=list(sel))
+
+
+def _offsets(config, orient):
+    """Offsets active for one coil orientation ('H', 'V' or 'P'); [] if inactive."""
+    if config.offsets is not None:
+        return [float(x) for x in config.offsets.get(orient, [])]
+    if orient not in config.coil_orientations:
+        return []
+    return list(config.perp_spacings if orient == 'P' else config.coil_spacings)
+
+
+def _rec(offs, height):
+    return [list(offs), np.zeros(len(offs)), -height]
 
 
 # Pre-built config matching the DUALEM-842s instrument used in the paper
@@ -83,13 +134,8 @@ def FDEM1D(sgm, thk, height=0.3, config=None):
         ])
 
     Freq = float(config.frequency)
-    coilSpacing = config.coil_spacings
-    pcoilSpacing = config.perp_spacings
-    coilOrient = np.array(config.coil_orientations)
-
-    source    = [0, 0, -height]
-    receivers = [coilSpacing, np.zeros(len(coilSpacing)), -height]
-    preceivers = [pcoilSpacing, np.zeros(len(pcoilSpacing)), -height]
+    offH, offV, offP = (_offsets(config, o) for o in 'HVP')
+    source = [0, 0, -height]
 
     res_air = 1e6
     res = np.hstack((res_air, 1/sgm))
@@ -97,7 +143,8 @@ def FDEM1D(sgm, thk, height=0.3, config=None):
 
     HOP = []; HIP = []; POP = []; PIP = []; VOP = []; VIP = []
 
-    if any(coilOrient == 'H'):
+    if len(offH):
+        receivers = _rec(offH, height)
         H_Hs = ep.dipole(source, receivers, depth, res, Freq, ab=66, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         H_Hp = ep.dipole(source, receivers, depth=[], res=[res_air], freqtime=Freq,
@@ -105,7 +152,8 @@ def FDEM1D(sgm, thk, height=0.3, config=None):
         HOP.append((H_Hs/H_Hp).imag.amp())
         HIP.append((H_Hs/H_Hp).real.amp())
 
-    if any(coilOrient == 'P'):
+    if len(offP):
+        preceivers = _rec(offP, height)
         P_Hs = ep.dipole(source, preceivers, depth, res, Freq, ab=46, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         P_Hp = ep.dipole(source, preceivers, depth=[], res=[res_air], freqtime=Freq,
@@ -113,7 +161,8 @@ def FDEM1D(sgm, thk, height=0.3, config=None):
         POP.append((P_Hs/P_Hp).imag.amp())
         PIP.append((P_Hs/P_Hp).real.amp())
 
-    if any(coilOrient == 'V'):
+    if len(offV):
+        receivers = _rec(offV, height)
         V_Hs = ep.dipole(source, receivers, depth, res, Freq, ab=55, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         V_Hp = ep.dipole(source, receivers, depth=[], res=[res_air], freqtime=Freq,
@@ -164,13 +213,8 @@ def FDEM1D_topo(sgm, thk, height=0.3, config=None):
         ])
 
     Freq = float(config.frequency)
-    coilSpacing = config.coil_spacings
-    pcoilSpacing = config.perp_spacings
-    coilOrient = np.array(config.coil_orientations)
-
-    source    = [0, 0, -height]
-    receivers = [coilSpacing, np.zeros(len(coilSpacing)), -height]
-    preceivers = [pcoilSpacing, np.zeros(len(pcoilSpacing)), -height]
+    offH, offV, offP = (_offsets(config, o) for o in 'HVP')
+    source = [0, 0, -height]
 
     res_air = 1e6
     res = np.hstack((res_air, 1/sgm))
@@ -178,7 +222,8 @@ def FDEM1D_topo(sgm, thk, height=0.3, config=None):
 
     HOP = []; HIP = []; POP = []; PIP = []; VOP = []; VIP = []
 
-    if any(coilOrient == 'H'):
+    if len(offH):
+        receivers = _rec(offH, height)
         H_Hs = ep.dipole(source, receivers, depth, res, Freq, ab=66, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         H_Hp = ep.dipole(source, receivers, depth=[], res=[res_air], freqtime=Freq,
@@ -186,7 +231,8 @@ def FDEM1D_topo(sgm, thk, height=0.3, config=None):
         HOP.append((H_Hs/H_Hp).imag.amp())
         HIP.append((H_Hs/H_Hp).real.amp())
 
-    if any(coilOrient == 'P'):
+    if len(offP):
+        preceivers = _rec(offP, height)
         P_Hs = ep.dipole(source, preceivers, depth, res, Freq, ab=46, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         P_Hp = ep.dipole(source, preceivers, depth=[], res=[res_air], freqtime=Freq,
@@ -194,7 +240,8 @@ def FDEM1D_topo(sgm, thk, height=0.3, config=None):
         POP.append((P_Hs/P_Hp).imag.amp())
         PIP.append((P_Hs/P_Hp).real.amp())
 
-    if any(coilOrient == 'V'):
+    if len(offV):
+        receivers = _rec(offV, height)
         V_Hs = ep.dipole(source, receivers, depth, res, Freq, ab=55, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         V_Hp = ep.dipole(source, receivers, depth=[], res=[res_air], freqtime=Freq,
@@ -239,13 +286,8 @@ def FDEM1D_field(sgm, thk, height=0.47, config=None):
         ])
 
     Freq = float(config.frequency)
-    coilSpacing = config.coil_spacings
-    pcoilSpacing = config.perp_spacings
-    coilOrient = np.array(config.coil_orientations)
-
-    source    = [0, 0, -height]
-    receivers = [coilSpacing, np.zeros(len(coilSpacing)), -height]
-    preceivers = [pcoilSpacing, np.zeros(len(pcoilSpacing)), -height]
+    offH, offV, offP = (_offsets(config, o) for o in 'HVP')
+    source = [0, 0, -height]
 
     res_air = 1e6
     res = np.hstack((res_air, 1/sgm))
@@ -253,15 +295,17 @@ def FDEM1D_field(sgm, thk, height=0.47, config=None):
 
     HOP = []; HIP = []; POP = []; PIP = []; VOP = []; VIP = []
 
-    if any(coilOrient == 'H'):
+    if len(offH):
+        receivers = _rec(offH, height)
         H_Hs = ep.dipole(source, receivers, depth, res, Freq, ab=66, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         H_Hp = ep.dipole(source, receivers, depth=[], res=[res_air], freqtime=Freq,
                          ab=66, verb=0) * (2j * np.pi * Freq * mu_0)
         HOP.append((H_Hs/H_Hp).imag.amp())
-        HIP.append((H_Hs/H_Hp).real.amp()[1:])  # 2 m IP not recorded in field data
+        HIP.append(np.atleast_1d((H_Hs/H_Hp).real.amp())[np.asarray(offH) != 2.0])  # 2 m IP not recorded in field data
 
-    if any(coilOrient == 'P'):
+    if len(offP):
+        preceivers = _rec(offP, height)
         P_Hs = ep.dipole(source, preceivers, depth, res, Freq, ab=46, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         P_Hp = ep.dipole(source, preceivers, depth=[], res=[res_air], freqtime=Freq,
@@ -269,13 +313,14 @@ def FDEM1D_field(sgm, thk, height=0.47, config=None):
         POP.append((P_Hs/P_Hp).imag.amp())
         PIP.append((P_Hs/P_Hp).real.amp())
 
-    if any(coilOrient == 'V'):
+    if len(offV):
+        receivers = _rec(offV, height)
         V_Hs = ep.dipole(source, receivers, depth, res, Freq, ab=55, xdirect=None, verb=0) \
                * (2j * np.pi * Freq * mu_0)
         V_Hp = ep.dipole(source, receivers, depth=[], res=[res_air], freqtime=Freq,
                          ab=55, verb=0) * (2j * np.pi * Freq * mu_0)
         VOP.append((V_Hs/V_Hp).imag.amp())
-        VIP.append((V_Hs/V_Hp).real.amp()[1:])  # 2 m IP not recorded in field data
+        VIP.append(np.atleast_1d((V_Hs/V_Hp).real.amp())[np.asarray(offV) != 2.0])  # 2 m IP not recorded in field data
 
     return np.concatenate([np.ravel(part) for part in (HOP, VOP, POP, HIP, VIP)])
 
@@ -312,50 +357,33 @@ def FDEM1D_mdp(sgm, thk, height=0.3, config=None):
         ])
 
     Freq = float(config.frequency)
-    coilOrient = np.array(config.coil_orientations)
+    offH, offV, offP = (_offsets(config, o) for o in 'HVP')
 
-    spacings = np.array(config.coil_spacings)
-    xsrc   = -spacings / 2
-    xrec   =  spacings / 2
-    perp   = np.array(config.perp_spacings)
-    xsrc_p = -perp / 2
-    xrec_p =  perp / 2
+    res_air = 1e6
+    res   = np.hstack((res_air, 1/sgm))
+    depth = np.hstack((0, np.cumsum(thk)))
 
-    HOP = []; HIP = []; VOP = []; VIP = []; POP = []; PIP = []
+    def mdp(offs, ab, ab_prim):
+        out = []
+        for d in offs:
+            src = [-d / 2, 0, -height]
+            rec = [d / 2, 0, -height]
+            Hs = ep.dipole(src, rec, depth, res, Freq, ab=ab, xdirect=None, verb=0)                  * (2j * np.pi * Freq * mu_0)
+            Hp = ep.dipole(src, rec, depth=[], res=[res_air], freqtime=Freq,
+                           ab=ab_prim, verb=0) * (2j * np.pi * Freq * mu_0)
+            out.append(Hs / Hp)
+        return out
 
-    for x_s, x_r, x_sp, x_rp in zip(xsrc, xrec, xsrc_p, xrec_p):
-        source    = [x_s,  0, -height]
-        receivers = [x_r,  0, -height]
-        psource   = [x_sp, 0, -height]
-        preceivers = [x_rp, 0, -height]
-
-        res_air = 1e6
-        res   = np.hstack((res_air, 1/sgm))
-        depth = np.hstack((0, np.cumsum(thk)))
-
-        if any(coilOrient == 'H'):
-            H_Hs = ep.dipole(source, receivers, depth, res, Freq, ab=66, xdirect=None, verb=0) \
-                   * (2j * np.pi * Freq * mu_0)
-            H_Hp = ep.dipole(source, receivers, depth=[], res=[res_air], freqtime=Freq,
-                             ab=66, verb=0) * (2j * np.pi * Freq * mu_0)
-            HOP.append((H_Hs/H_Hp).imag.amp())
-            HIP.append((H_Hs/H_Hp).real.amp())
-
-        if any(coilOrient == 'V'):
-            V_Hs = ep.dipole(source, receivers, depth, res, Freq, ab=55, xdirect=None, verb=0) \
-                   * (2j * np.pi * Freq * mu_0)
-            V_Hp = ep.dipole(source, receivers, depth=[], res=[res_air], freqtime=Freq,
-                             ab=55, verb=0) * (2j * np.pi * Freq * mu_0)
-            VOP.append((V_Hs/V_Hp).imag.amp())
-            VIP.append((V_Hs/V_Hp).real.amp())
-
-        if any(coilOrient == 'P'):
-            P_Hs = ep.dipole(psource, preceivers, depth, res, Freq, ab=46, xdirect=None, verb=0) \
-                   * (2j * np.pi * Freq * mu_0)
-            P_Hp = ep.dipole(psource, preceivers, depth=[], res=[res_air], freqtime=Freq,
-                             ab=66, verb=0) * (2j * np.pi * Freq * mu_0)
-            POP.append((P_Hs/P_Hp).imag.amp())
-            PIP.append((P_Hs/P_Hp).real.amp())
+    HOP = HIP = VOP = VIP = POP = PIP = []
+    if len(offH):
+        r = mdp(offH, 66, 66)
+        HOP = [x.imag.amp() for x in r]; HIP = [x.real.amp() for x in r]
+    if len(offV):
+        r = mdp(offV, 55, 55)
+        VOP = [x.imag.amp() for x in r]; VIP = [x.real.amp() for x in r]
+    if len(offP):
+        r = mdp(offP, 46, 66)
+        POP = [x.imag.amp() for x in r]; PIP = [x.real.amp() for x in r]
 
     return np.concatenate([np.ravel(part) for part in (HOP, POP, VOP, HIP, PIP, VIP)])
 
@@ -596,6 +624,7 @@ class LCModelling(pg.frameworks.LCModelling):
         for i in range(boundaries_thk + boundaries_sig):
             CM[i, i:h.shape[1]+i] = h
 
+        self._CMnp = CM
         self.CM = pg.utils.toSparseMatrix(CM)
         return self.CM
 
@@ -614,9 +643,23 @@ class LCModelling(pg.frameworks.LCModelling):
         print('Constraint cWeight length:', len(self.cWeight))
 
     def createConstraints(self):
-        self._CW = pg.matrix.LMultRMatrix(self.CM, self.cWeight, verbose=True)
+        # pygimli's inversion calls fop.createConstraints() itself (inv.start()) and
+        # reads the region manager's constraint weights, which only exist after the
+        # base-class call. Build the standard constraints first, then replace them by
+        # the lateral-only matrix, padded with zero rows to the row count the region
+        # manager expects. pygimli clears the matrix object when an Inversion is set up,
+        # so repeated calls rebuild it from the stored dense array.
+        if getattr(self, '_Cdense', None) is None:
+            super().createConstraints()
+            nRows = self.constraints().rows()
+            nLat = self._CMnp.shape[0]
+            if nRows < nLat:
+                raise ValueError(f'Region manager has {nRows} constraint rows, need {nLat}')
+            self._Cdense = np.zeros((nRows, self._CMnp.shape[1]))
+            self._Cdense[:nLat] = np.asarray(self.cWeight)[:, None] * self._CMnp
+        self._CW = pg.utils.toSparseMatrix(self._Cdense)
         self.setConstraints(self._CW)
-        print('CW: ', self._CW)
+        return self._CW
 
     def normalization(self, dataVals, cWeight_1, cWeight_2, phiM_norm=[0, 0.5, 0.5, 1], nLay=None):
         cw_thk = cWeight_1
