@@ -57,6 +57,50 @@ python run_pwi_field.py data/sample.xyz
 See [`Field/README.md`](Field/README.md) for the full guide: input format,
 all CLI options, output files, and how to use `dualem_xyz.py` directly.
 
+## Selecting coil configurations and offsets
+
+The forward models in `src/FDEM1D.py` can use any subset of the instrument's
+coils and offsets. Available coils and offsets (DUALEM-842s):
+
+| Coil | Offsets [m]       |
+|------|-------------------|
+| `H`  | 2.0, 4.0, 8.0     |
+| `V`  | 2.0, 4.0, 8.0     |
+| `P`  | 2.1, 4.1, 8.1     |
+
+Use `InstrumentConfig.subset(coils=..., offsets=...)`. Offsets are matched on
+their integer part, so `2` selects H/V at 2.0 m **and** P at 2.1 m.
+
+```python
+from FDEM1D import FDEM1D, DUALEM842S
+
+cfg = DUALEM842S.subset(coils=['H'], offsets=[2, 4])        # H at 2.0 and 4.0 m
+cfg = DUALEM842S.subset(coils=['H', 'P'], offsets=[8])      # H 8.0 m, P 8.1 m
+cfg = DUALEM842S.subset(coils=['V'])                        # V, all offsets
+cfg = DUALEM842S.subset(offsets=[4, 8])                     # all coils, 4 and 8 m
+
+resp = FDEM1D(sgm, thk, config=cfg)
+```
+
+For different offsets per coil, give them explicitly:
+
+```python
+from FDEM1D import InstrumentConfig
+cfg = InstrumentConfig(offsets={'H': [2.0, 4.0], 'V': [8.0], 'P': [4.1]})
+```
+
+The config works with `FDEM1D`, `FDEM1D_mdp`, `FDEM1D_field`, `FDEM1D_topo`
+and the `FDEM1DModelling*` classes (`config=cfg`).
+
+Notes:
+
+- The response vector keeps the order `[HOP, POP, VOP, HIP, PIP, VIP]`
+  (`FDEM1D_field`: `[HOP, VOP, POP, HIP, VIP]`), containing only the selected
+  channels. Select the observed data the same way, or the sizes won't match.
+- `FDEM1D_field` never includes 2 m in-phase (not recorded in field data), so
+  H or V at 2 m only gives quadrature values.
+- Asking for a coil with no matching offset raises a `ValueError`.
+
 ## `2Layers` notes
 
 `run_lci.py` and `run_pwi.py` take a `slope`/`contrast`/`unit` triple and
